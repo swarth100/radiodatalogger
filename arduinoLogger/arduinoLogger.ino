@@ -1,37 +1,42 @@
-/* 
-  RF Blink - Receiver sketch 
-     Written by ScottC 17 Jun 2014
-     Arduino IDE version 1.0.5
-     Website: http://arduinobasics.blogspot.com
-     Receiver: XY-MK-5V
-     Description: A simple sketch used to test RF transmission/receiver.          
- ------------------------------------------------------------- */
+#include <SD.h>
 #include "RTClib.h"
 
-#define rfReceivePin A0  //RF Receiver pin = Analog pin 0
-#define rfReceivePinDigital 2
+#define rfReceivePin A0  /* RF Receiver pin = Analog pin 0 */
 
 RTC_DS1307 rtc;
 
-unsigned int data = 0;   // variable used to store received data
-int cnt = 0;
+unsigned int data = 0;      /* Stores received analog raw data from rfReceivePin */
+unsigned int avg = 0;       /* Stores the sum of 5 data instances */
+unsigned int avgCnt = 0;    /* Keeps count of the data instances summed into avg */
+unsigned int cnt = 0;       /* Holds the avg value divided by the avgCnt */
 
-unsigned int avg = 0;
-unsigned int avgCnt = 0;
+int type = 0;               /* Stores the "type" of data received (i.e. 300 or 600) */
+int typeCounter = 0;        /* Stores the number of consecutive identical types */
 
-int type = 0;
-int typeCounter = 0;
-int type0Counter = 0;
+int points = 0;             /* Stores the consecutive number of wave hits */
 
-int points = 0;
+int pointBuffer = 0;        /* Keeps track of possible wave misses due to errors */
 
-int pointBuffer = 0;
+int pressCounter = 0;       /* Keeps track of consecutive number of w<ve hits */
 
-int pressCounter = 0;
+bool prevLow = false;       /* Keeps track of consecutive wave oscillations */
 
-int valueArray[550];
+unsigned long checkSum = 0; /* Holds the checksum value of the wave */
+int highFrequency = 0;      /* Holds the "parity" of the wave */
 
-void setup () {
+void resetValues() {
+  if (pointBuffer > 0) {
+    pointBuffer --;
+  } else {
+    pointBuffer = 20;
+    points = 0;
+    checkSum = 0;
+    highFrequency = 0;
+    typeCounter = 0;
+  }
+}
+
+void setup() {
   Serial.begin(9600);
   
   if (! rtc.begin()) {
@@ -45,15 +50,13 @@ void setup () {
   }
 }
 
-void loop(){
+void loop() {
   DateTime now = rtc.now();
   
   data=analogRead(rfReceivePin);    //listen for data on Analog pin 0
 
   avg += data;
   avgCnt ++;
-
-  valueArray[(points * 5) + avgCnt] = data;
 
   if (avgCnt >= 5) {
     cnt = avg / avgCnt;
@@ -88,68 +91,44 @@ void loop(){
       typeCounter ++;
     } else if (cnt >= 0 && cnt <= 20) {
       if (type != 0) {
-        type0Counter = 0;
+        typeCounter = 0;
       }
 
       type = 0;
-      type0Counter ++;
+      typeCounter ++;
     } else {
       typeCounter = 0;
 
-      if (pointBuffer > 0) {
-        pointBuffer --;
-      } else {
-        pointBuffer = 20;
-        points = 0;
-      }
+      resetValues();
     }
 
     if (typeCounter != 0) {
       points ++;
 
-      if (typeCounter >= 3 || type0Counter >= 2) {
-        if (pointBuffer > 0) {
-          pointBuffer --;
-        } else {
-          pointBuffer = 20;
-          points = 0;
-          typeCounter = 0;
-          type0Counter = 0;
+      checkSum += avg;
+
+      if (avg >= 1750) {
+        if (!prevLow) {
+          highFrequency ++;
         }
+    
+        prevLow = false;
+      } else {
+        if (prevLow) {
+          highFrequency ++;
+        }
+    
+        prevLow = true;
+      }
+
+      if (typeCounter >= 3 || (typeCounter >= 2 && type == 0)) {
+        resetValues();
       }
 
       if (points >= 100) {
-        unsigned long checkSum = 0;
-        int highFrequency = 0;
 
-        bool prevLow = false;
-        int value = 0;
-
-        for (int i = 0; i <= points * 5; i ++) {
-          value = valueArray[i];
-
-          checkSum += value;
-          // Serial.println(value);
-
-          if (value >= 350) {
-            if (!prevLow) {
-              highFrequency ++;
-            }
-
-            prevLow = false;
-          } else {
-            if (prevLow) {
-              highFrequency ++;
-            }
-
-            prevLow = true;
-          }
-        }
-        
-        points = 0;
-
-        if ((checkSum >= 115000 && checkSum <= 135000) &&
-            (highFrequency >= 330 && highFrequency <= 360)) {
+        if ((checkSum >= 100000 && checkSum <= 140000) &&
+            (highFrequency >= 50 && highFrequency <= 70)) {
               pressCounter ++;
               Serial.print("PRESS #");
               Serial.println(pressCounter);
@@ -163,10 +142,13 @@ void loop(){
 
         Serial.print("---------- CLARITY -------------: ");
         Serial.println(highFrequency);
+
+        points = 0;
+        checkSum = 0;
+        highFrequency = 0;
       }
     }
     
-    // Serial.println(avg / avgCnt);
     avgCnt = 0;
     avg = 0; 
   }
