@@ -20,10 +20,17 @@ int pointBuffer = 0;        /* Keeps track of possible wave misses due to errors
 int pressCounter = 0;       /* Keeps track of consecutive number of w<ve hits */
 
 bool prevLow = false;       /* Keeps track of consecutive wave oscillations */
+bool prevMed = false;
+bool prevHigh = false;
+
+int lowFrequency = 0;       /* Holds the "parity" of the wave */
+int medFrequency = 0;
+int highFrequency = 0;
 
 unsigned long checkSum = 0; /* Holds the checksum value of the wave */
-int highFrequency = 0;      /* Holds the "parity" of the wave */
 
+/* Resets the global logged values.
+   Takes into account the point buffer avoiding reset until exhaustion */
 void resetValues() {
   if (pointBuffer > 0) {
     pointBuffer --;
@@ -31,11 +38,40 @@ void resetValues() {
     pointBuffer = 20;
     points = 0;
     checkSum = 0;
+    lowFrequency = 0;
+    medFrequency = 0;
     highFrequency = 0;
     typeCounter = 0;
   }
 }
 
+/* Updates the type and typeCounter values
+   Resets the typeCounter should the type have changed*/
+void checkType (int refValue) {
+  if (type != refValue) {
+      typeCounter = 0;
+    }
+
+    type = refValue;
+    typeCounter ++;
+}
+
+/* Updates the frequency counters (ints) on consecutive refBool hits */
+void checkFreq (int threshold, bool* refBool, int* refInt) {
+  if (avg >= threshold) {
+    if (!*refBool) {
+      (*refInt) ++;
+    }
+    *refBool = false;
+  } else {
+    if (*refBool) {
+      (*refInt) ++;
+    }
+    *refBool = true;
+  }
+}
+
+/* Sets up the main arduino components */
 void setup() {
   Serial.begin(9600);
   
@@ -51,84 +87,59 @@ void setup() {
 }
 
 void loop() {
+  /* Retrieves an instance of the current date and time */
   DateTime now = rtc.now();
-  
-  data=analogRead(rfReceivePin);    //listen for data on Analog pin 0
 
+  /* Listens for data on analog port A0 */
+  data=analogRead(rfReceivePin);
+
+  /* Increments avg and avgCnt at every read */
   avg += data;
   avgCnt ++;
 
+  /* Whenever there are more than 5 pieces of data calculations to determine
+     wether it is the right wave or not are fired. */
   if (avgCnt >= 5) {
     cnt = avg / avgCnt;
-
-    if (cnt >= 450 && cnt <= 470) {
-      if (type != 4) {
-        typeCounter = 0;
-      }
-
-      type = 4;
-      typeCounter ++;
+    if (cnt >= 0 && cnt <= 20) {
+      checkType(0);
     } else if (cnt >= 145 && cnt <= 175) {
-      if (type != 1) {
-        typeCounter = 0;
-      }
-
-      type = 1;
-      typeCounter ++;
+      checkType(1);
     } else if (cnt >= 295 && cnt <= 315) {
-      if (type != 3) {
-        typeCounter = 0;
-      }
-
-      type = 3;
-      typeCounter ++;
+      checkType(3);
+    } else if (cnt >= 450 && cnt <= 470) {
+      checkType(4);
     } else if (cnt >= 605 && cnt <= 625) {
-      if (type != 6) {
-        typeCounter = 0;
-      }
-
-      type = 6;
-      typeCounter ++;
-    } else if (cnt >= 0 && cnt <= 20) {
-      if (type != 0) {
-        typeCounter = 0;
-      }
-
-      type = 0;
-      typeCounter ++;
+      checkType(6);
     } else {
       typeCounter = 0;
-
       resetValues();
     }
 
+    /* When a valid item in the wave is found we can enter the validation area */
     if (typeCounter != 0) {
       points ++;
 
       checkSum += avg;
 
-      if (avg >= 1750) {
-        if (!prevLow) {
-          highFrequency ++;
-        }
-    
-        prevLow = false;
-      } else {
-        if (prevLow) {
-          highFrequency ++;
-        }
-    
-        prevLow = true;
-      }
+      /* Update the consecutive frequency counters where necessary */
+      checkFreq(1000, &prevLow, &lowFrequency);
+      checkFreq(1750, &prevMed, &medFrequency);
+      checkFreq(2500, &prevHigh, &highFrequency);
 
+      /* Reset values should the type counter have exceeded the allowed thresholds */
       if (typeCounter >= 3 || (typeCounter >= 2 && type == 0)) {
         resetValues();
       }
 
+      /* Should the consecutive point hits be greater than 100 consider the wave */
       if (points >= 100) {
 
+        /* Perform value threshold checks and accordingly consider or remove the wave */
         if ((checkSum >= 100000 && checkSum <= 140000) &&
-            (highFrequency >= 50 && highFrequency <= 70)) {
+            (lowFrequency >= 25 && lowFrequency <= 45) && 
+            (medFrequency >= 50 && medFrequency <= 70) &&
+            (highFrequency >= 90)) {
               pressCounter ++;
               Serial.print("PRESS #");
               Serial.println(pressCounter);
@@ -140,15 +151,22 @@ void loop() {
         Serial.print("---------- CHECKSUM -------------: ");
         Serial.println(checkSum);
 
-        Serial.print("---------- CLARITY -------------: ");
+        Serial.print("---------- LOW FR -------------: ");
+        Serial.println(lowFrequency);
+
+        Serial.print("---------- MED FR -------------: ");
+        Serial.println(medFrequency);
+
+        Serial.print("---------- HIGH FR -------------: ");
         Serial.println(highFrequency);
 
-        points = 0;
-        checkSum = 0;
-        highFrequency = 0;
+        /* Force a pointBuffer of 0 and reset all the values */
+        pointBuffer = 0;
+        resetValues();
       }
     }
-    
+
+    /* Reset the avg counters */
     avgCnt = 0;
     avg = 0; 
   }
