@@ -18,9 +18,9 @@ RTC_DS1307 rtc;             /* Time references */
 
 File logfile;               /* Filesystem used for logging */
 
-DateTime now;
+DateTime now;               /* Holds the Date and time instance */
 
-#define SYNC_INTERVAL 5000  /* Intervals between calls to writing output */
+#define SYNC_INTERVAL 900000  /* Intervals between calls to writing output */
 uint32_t syncTime = 0;      /* Time of last sync */ 
  
 unsigned int data = 0;      /* Stores received analog raw data from rfReceivePin */
@@ -37,33 +37,34 @@ int pointBuffer = 0;        /* Keeps track of possible wave misses due to errors
 
 int pressCounter = 0;       /* Keeps track of consecutive number of wave hits */
 
-bool prevLow = false;       /* Keeps track of consecutive wave oscillations */
-bool prevMed = false;
-bool prevHigh = false;
+bool prevLow = false;       /* Keeps track of consecutive low wave oscillations */
+bool prevMed = false;       /* Keeps track of consecutive medium wave oscillations */
+bool prevHigh = false;      /* Keeps track of consecutive high wave oscillations */
 
-int lowFrequency = 0;       /* Holds the "parity" of the wave */
-int medFrequency = 0;
-int highFrequency = 0;
+int lowFrequency = 0;       /* Holds the low "parity" of the wave */
+int medFrequency = 0;       /* Holds the medium "parity" of the wave */
+int highFrequency = 0;      /* Holds the high "parity" of the wave */
 
 unsigned long checkSum = 0; /* Holds the checksum value of the wave */
 
-long sdCardVal = 0;
-int sdCardCnt = 0;
+long sdCardVal = 0;         /* Holds the value retrieved by the SD analog IN */
+int sdCardCnt = 0;          /* Buffer counter to parse multiple analog entries together */
 
-bool isCardInserted = true;
+bool isCardInserted = true; /* Boolean to keep track if the cart is inserted and we caan write to it */
 
-void (*Reboot)() = 0;
-
+/* Prints a string of characters to both the logfile and the serial port */
 void printStr(char* data) {
   logfile.print(data);    
   Serial.print(data);
 }
 
+/* Prints a string of integers to both the logfile and the serial port */
 void printInt(long data) {
   logfile.print(data, DEC);    
   Serial.print(data, DEC);
 }
 
+/* Prints anew line to both the logfile and the serial port */
 void printLn() {
   logfile.println();    
   Serial.println();
@@ -111,23 +112,27 @@ void checkFreq (int threshold, bool* refBool, int* refInt) {
   }
 }
 
+/* Handles the error state for the board.
+   Once the error state is reached we can only deactivate it by resetting the whole board */
 void error(char *str)
 {
   Serial.print("Error: ");
   Serial.println(str);
 
-  while(1);
+  digitalWrite(DisconnectLED, HIGH);
+  isCardInserted = false;
 }
 
+/* Prints the current time into excel supported csv DateTime format */
 void printTime() {
-
   /* Fetch the milliseconds since the start */
   printInt(millis());
   printStr("; ");    
 
-  // fetch the time
+  /* Retrieves the current time */
   now = rtc.now();
-  // log time
+
+  /* Logs the time into EXCEL supported Date Format */
   printInt(now.unixtime()); // seconds since 1/1/1970
   printStr(";");
   printInt(now.day());
@@ -173,29 +178,31 @@ void setup() {
   /* Check the card's status/presence */
   if (!SD.begin(chipSelect)) {
     error("Card failed, or not present");
-  }
-  Serial.println("card initialized.");
-
-  /* Attepts to create a new logger file
-     Will create up to 100 possible files. Will not open already created files*/
-  char filename[] = "LOGGER00.CSV";
-  for (uint8_t i = 0; i < 100; i++) {
-    filename[6] = i/10 + '0';
-    filename[7] = i%10 + '0';
-    if (! SD.exists(filename)) {
-      /* Only opens unexistant files */
-      logfile = SD.open(filename, FILE_WRITE); 
-      break;
+  } else {
+    Serial.println("card initialized.");
+  
+    /* Attepts to create a new logger file
+       Will create up to 100 possible files. Will not open already created files*/
+    char filename[] = "LOGGER00.CSV";
+    for (uint8_t i = 0; i < 100; i++) {
+      filename[6] = i/10 + '0';
+      filename[7] = i%10 + '0';
+      if (! SD.exists(filename)) {
+        /* Only opens unexistant files */
+        logfile = SD.open(filename, FILE_WRITE); 
+        break;
+      }
     }
+
+    /* Logfile failure */
+    if (! logfile) {
+      error("couldnt create file");
+    }
+    
+    Serial.print("Logging to: ");
+    Serial.println(filename);
   }
 
-  /* Logfile failure */
-  if (! logfile) {
-    error("couldnt create file");
-  }
-
-  Serial.print("Logging to: ");
-  Serial.println(filename);
 
   Wire.begin();
 
@@ -218,6 +225,7 @@ void loop() {
      wether it is the right wave or not are fired. */
   if (avgCnt >= 5) {
     cnt = avg / avgCnt;
+    
     if (cnt >= 0 && cnt <= 20) {
       checkType(0);
     } else if (cnt >= 145 && cnt <= 175) {
@@ -229,7 +237,6 @@ void loop() {
     } else if (cnt >= 605 && cnt <= 625) {
       checkType(6);
     } else {
-      typeCounter = 0;
       resetValues();
     }
 
@@ -254,9 +261,9 @@ void loop() {
 
         /* Perform value threshold checks and accordingly consider or remove the wave */
         if ((checkSum >= 100000 && checkSum <= 140000) &&
-            (lowFrequency >= 20 && lowFrequency <= 50) && 
-            (medFrequency >= 50 && medFrequency <= 80) &&
-            (highFrequency >= 80)) {
+            (lowFrequency >= 30 && lowFrequency <= 50) && 
+            (medFrequency >= 55 && medFrequency <= 75) &&
+            (highFrequency >= 90)) {
               pressCounter ++;
               Serial.print("PRESS #");
               Serial.println(pressCounter);
@@ -292,6 +299,8 @@ void loop() {
     digitalWrite(WaveLED, LOW);
   }
 
+  /* Logs the data received by the SD card output
+     Sccordingly switches the "SD CARD INSERTED" led on and off */
   sdCardVal += analogRead(cardInsertPin);
   sdCardCnt ++;
 
@@ -306,14 +315,10 @@ void loop() {
     sdCardCnt = 0;
   }
 
-  if (digitalRead(BtnPIN) == HIGH) {  
+  /* Disconnect button. Pressed prior to save removal of SD card */
+  if (digitalRead(BtnPIN) == LOW) {  
     if (isCardInserted) {
-      digitalWrite(DisconnectLED, LOW); 
-    }
-  } else {
-    if (isCardInserted) {
-      digitalWrite(DisconnectLED, HIGH);
-      isCardInserted = false;
+      error("SD Reader OFFLINE");
     }
   }
 
@@ -321,13 +326,13 @@ void loop() {
   if ((millis() - syncTime) < SYNC_INTERVAL) return;
   syncTime = millis();
 
-  printTime();
-
-  printInt(pressCounter);
-  printStr(";");
-  printLn();
-
   if (isCardInserted) {
+    printTime();
+  
+    printInt(pressCounter);
+    printStr(";");
+    printLn();
+
     digitalWrite(WriteLED, HIGH);
     
     logfile.flush();
