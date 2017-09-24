@@ -120,6 +120,7 @@ void error(char *str)
   Serial.println(str);
 
   digitalWrite(DisconnectLED, HIGH);
+  digitalWrite(WriteLED, LOW);
   isCardInserted = false;
 }
 
@@ -159,6 +160,8 @@ void setup() {
   pinMode(WaveLED, OUTPUT);
 
   pinMode(BtnPIN, INPUT);
+
+  digitalWrite(WriteLED, HIGH);
   
   if (! rtc.begin()) {
     Serial.println("Couldn't find RTC");
@@ -333,11 +336,11 @@ void loop() {
     printStr(";");
     printLn();
 
-    digitalWrite(WriteLED, HIGH);
+    digitalWrite(WriteLED, LOW);
     
     logfile.flush();
     
-    digitalWrite(WriteLED, LOW);
+    digitalWrite(WriteLED, HIGH);
   }
 
   /* Resets permanent interval press counter counts */
